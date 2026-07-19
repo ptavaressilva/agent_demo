@@ -6,7 +6,7 @@ results (falls back to the MCP server's unauthenticated/degraded behavior
 without it, if it has one).
 
 Usage:
-    uv run python scripts/run_local.py "Find me senior backend roles in Lisbon"
+    uv run python scripts/run_local.py "Find me a 3-bedroom house in Lisbon"
 """
 
 from __future__ import annotations
@@ -16,21 +16,21 @@ import sys
 
 from agent_demo.runner import run
 
-CANDIDATE_PROFILE = """\
-8 years of backend engineering experience, primarily Python and Go.
-Strong in distributed systems and API design. Prefers remote-first
-companies based in Europe. Target roles: Senior/Staff Backend Engineer.
-Salary floor: EUR 90,000.
+BUYER_PROFILE = """\
+Household of three (couple + one child) looking for a first home.
+Wants 3+ bedrooms, a garden or outdoor space, and good access to public
+transit. Prefers Lisbon or nearby commuter towns. Budget ceiling: EUR
+450,000. Open to needing light renovation but not a full fixer-upper.
 """
 
 
 async def main() -> None:
-    message = " ".join(sys.argv[1:]) or "Find me a few senior backend roles that fit my profile."
+    message = " ".join(sys.argv[1:]) or "Find me a few houses that fit my profile."
     result = await run(
         {
             "message": message,
-            "candidate_id": "local-dev-candidate",
-            "candidate_profile": CANDIDATE_PROFILE,
+            "buyer_id": "local-dev-buyer",
+            "buyer_profile": BUYER_PROFILE,
         }
     )
     print(f"\n--- session_id: {result.session_id} ({result.message_count} messages) ---\n")

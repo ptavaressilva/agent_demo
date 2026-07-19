@@ -1,10 +1,10 @@
-"""Local tools backed by Postgres: persist discovered job offers, record the
-agent's fit rating for each one, and save draft (never auto-submitted)
-application materials.
+"""Local tools backed by Postgres: persist discovered house listings, record
+the agent's fit rating for each one, and save draft (never auto-sent)
+viewing requests.
 
-Tools are built per-session via `build_job_tools(pool, session_id)` so the
+Tools are built per-session via `build_listing_tools(pool, session_id)` so the
 LLM never has to pass `session_id` itself -- it's bound from the graph's
-invocation context, which keeps a job offer's identity tied to the
+invocation context, which keeps a listing's identity tied to the
 conversation that discovered it.
 """
 
@@ -43,67 +43,67 @@ async def close_pool() -> None:
         _pool = None
 
 
-def build_job_tools(pool: asyncpg.Pool, session_id: str) -> list[BaseTool]:
-    """Return the four job-persistence tools bound to `session_id`."""
+def build_listing_tools(pool: asyncpg.Pool, session_id: str) -> list[BaseTool]:
+    """Return the four listing-persistence tools bound to `session_id`."""
 
     @tool
-    async def save_job_offer(
+    async def save_house_listing(
         source_url: str,
         title: str,
-        company: str = "",
+        price: str = "",
         location: str = "",
         description: str = "",
-        salary_range: str = "",
-        posted_at: str = "",
+        property_type: str = "",
+        listed_at: str = "",
         raw_snippet: str = "",
     ) -> str:
-        """Persist a job posting you found so it can be rated and, if it's a
-        good fit, drafted into an application. Call this once per distinct
-        job posting before rating or drafting for it. Returns the job's
-        internal id (an integer as a string) -- use that id in
-        rate_job_offer and draft_application_materials.
+        """Persist a house listing you found so it can be rated and, if it's
+        a good fit, drafted into a viewing request. Call this once per
+        distinct listing before rating or drafting for it. Returns the
+        listing's internal id (an integer as a string) -- use that id in
+        rate_listing and draft_viewing_request.
         """
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO job_offers
-                    (session_id, source_url, title, company, location,
-                     description, salary_range, posted_at, raw_snippet)
+                INSERT INTO house_listings
+                    (session_id, source_url, title, price, location,
+                     description, property_type, listed_at, raw_snippet)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT (session_id, source_url) DO UPDATE SET
                     title = EXCLUDED.title,
-                    company = EXCLUDED.company,
+                    price = EXCLUDED.price,
                     location = EXCLUDED.location,
                     description = EXCLUDED.description,
-                    salary_range = EXCLUDED.salary_range,
-                    posted_at = EXCLUDED.posted_at,
+                    property_type = EXCLUDED.property_type,
+                    listed_at = EXCLUDED.listed_at,
                     raw_snippet = EXCLUDED.raw_snippet
                 RETURNING id
                 """,
                 session_id,
                 source_url,
                 title,
-                company,
+                price,
                 location,
                 description,
-                salary_range,
-                posted_at,
+                property_type,
+                listed_at,
                 raw_snippet,
             )
             return str(row["id"])
 
     @tool
-    async def rate_job_offer(
-        job_offer_id: str,
+    async def rate_listing(
+        listing_id: str,
         score: int,
         rationale: str,
-        matched_skills: list[str] | None = None,
-        missing_skills: list[str] | None = None,
+        matched_features: list[str] | None = None,
+        missing_features: list[str] | None = None,
     ) -> str:
-        """Record your fit assessment of a saved job offer against the
-        candidate's profile. `score` is 0-100 (100 = perfect fit).
+        """Record your fit assessment of a saved house listing against the
+        buyer's profile. `score` is 0-100 (100 = perfect fit).
         `rationale` should explain the score in 1-3 sentences.
-        job_offer_id must come from a prior save_job_offer call.
+        listing_id must come from a prior save_house_listing call.
         """
         if not 0 <= score <= 100:
             return f"Error: score must be between 0 and 100, got {score}."
@@ -111,98 +111,99 @@ def build_job_tools(pool: asyncpg.Pool, session_id: str) -> list[BaseTool]:
             try:
                 await conn.execute(
                     """
-                    INSERT INTO job_ratings
-                        (job_offer_id, score, rationale, matched_skills, missing_skills)
+                    INSERT INTO listing_ratings
+                        (listing_id, score, rationale, matched_features, missing_features)
                     VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT (job_offer_id) DO UPDATE SET
+                    ON CONFLICT (listing_id) DO UPDATE SET
                         score = EXCLUDED.score,
                         rationale = EXCLUDED.rationale,
-                        matched_skills = EXCLUDED.matched_skills,
-                        missing_skills = EXCLUDED.missing_skills,
+                        matched_features = EXCLUDED.matched_features,
+                        missing_features = EXCLUDED.missing_features,
                         rated_at = now()
                     """,
-                    int(job_offer_id),
+                    int(listing_id),
                     score,
                     rationale,
-                    matched_skills or [],
-                    missing_skills or [],
+                    matched_features or [],
+                    missing_features or [],
                 )
             except (ValueError, asyncpg.ForeignKeyViolationError):
                 return (
-                    f"Error: no job offer with id {job_offer_id!r} for this session. "
-                    "Call save_job_offer first."
+                    f"Error: no house listing with id {listing_id!r} for this session. "
+                    "Call save_house_listing first."
                 )
-        return f"Rated job {job_offer_id}: {score}/100."
+        return f"Rated listing {listing_id}: {score}/100."
 
     @tool
-    async def list_rated_job_offers(min_score: int = 0) -> str:
-        """List job offers saved in this session, with their fit score if
-        rated, sorted best-fit first. Use this to decide which jobs are
-        worth drafting an application for.
+    async def list_rated_listings(min_score: int = 0) -> str:
+        """List house listings saved in this session, with their fit score
+        if rated, sorted best-fit first. Use this to decide which listings
+        are worth drafting a viewing request for.
         """
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT o.id, o.title, o.company, o.source_url,
+                SELECT l.id, l.title, l.price, l.location, l.source_url,
                        r.score, r.rationale
-                FROM job_offers o
-                LEFT JOIN job_ratings r ON r.job_offer_id = o.id
-                WHERE o.session_id = $1 AND COALESCE(r.score, 0) >= $2
-                ORDER BY r.score DESC NULLS LAST, o.discovered_at DESC
+                FROM house_listings l
+                LEFT JOIN listing_ratings r ON r.listing_id = l.id
+                WHERE l.session_id = $1 AND COALESCE(r.score, 0) >= $2
+                ORDER BY r.score DESC NULLS LAST, l.discovered_at DESC
                 """,
                 session_id,
                 min_score,
             )
         if not rows:
-            return "No job offers saved yet for this session."
+            return "No house listings saved yet for this session."
         lines = [
             f"- id={r['id']} score={r['score'] if r['score'] is not None else 'unrated'} "
-            f"{r['title']!r} at {r['company']!r} ({r['source_url']}) "
+            f"{r['title']!r} at {r['location']!r} ({r['price'] or 'price n/a'}) "
+            f"({r['source_url']}) "
             f"{'- ' + r['rationale'] if r['rationale'] else ''}"
             for r in rows
         ]
         return "\n".join(lines)
 
     @tool
-    async def draft_application_materials(
-        job_offer_id: str,
-        cover_letter: str,
-        resume_highlights: str,
-        notes_for_candidate: str = "",
+    async def draft_viewing_request(
+        listing_id: str,
+        inquiry_message: str,
+        buyer_highlights: str,
+        notes_for_buyer: str = "",
     ) -> str:
-        """Save a draft cover letter and resume highlights tailored to a
-        specific job offer for the CANDIDATE to review and submit
-        themselves. This tool never submits anything anywhere -- it only
-        persists a draft. Only draft for jobs the candidate would want to
-        apply to (check list_rated_job_offers first).
+        """Save a draft inquiry message and buyer highlights tailored to a
+        specific house listing for the BUYER to review and send themselves.
+        This tool never contacts the listing agent or schedules anything --
+        it only persists a draft. Only draft for listings the buyer would
+        want to view (check list_rated_listings first).
         """
         async with pool.acquire() as conn:
             try:
                 await conn.execute(
                     """
-                    INSERT INTO application_drafts
-                        (job_offer_id, cover_letter, resume_highlights, notes_for_candidate)
+                    INSERT INTO viewing_requests
+                        (listing_id, inquiry_message, buyer_highlights, notes_for_buyer)
                     VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (job_offer_id) DO UPDATE SET
-                        cover_letter = EXCLUDED.cover_letter,
-                        resume_highlights = EXCLUDED.resume_highlights,
-                        notes_for_candidate = EXCLUDED.notes_for_candidate,
+                    ON CONFLICT (listing_id) DO UPDATE SET
+                        inquiry_message = EXCLUDED.inquiry_message,
+                        buyer_highlights = EXCLUDED.buyer_highlights,
+                        notes_for_buyer = EXCLUDED.notes_for_buyer,
                         status = 'draft',
                         created_at = now()
                     """,
-                    int(job_offer_id),
-                    cover_letter,
-                    resume_highlights,
-                    notes_for_candidate,
+                    int(listing_id),
+                    inquiry_message,
+                    buyer_highlights,
+                    notes_for_buyer,
                 )
             except (ValueError, asyncpg.ForeignKeyViolationError):
                 return (
-                    f"Error: no job offer with id {job_offer_id!r} for this session. "
-                    "Call save_job_offer first."
+                    f"Error: no house listing with id {listing_id!r} for this session. "
+                    "Call save_house_listing first."
                 )
         return (
-            f"Saved a draft application for job {job_offer_id}. "
-            "The candidate must review and submit it themselves -- nothing was sent."
+            f"Saved a draft viewing request for listing {listing_id}. "
+            "The buyer must review and send it themselves -- nothing was sent."
         )
 
-    return [save_job_offer, rate_job_offer, list_rated_job_offers, draft_application_materials]
+    return [save_house_listing, rate_listing, list_rated_listings, draft_viewing_request]

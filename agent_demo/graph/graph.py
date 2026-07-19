@@ -53,7 +53,7 @@ def build_graph(
 ) -> CompiledStateGraph:
     async def agent_node(state: AgentState) -> dict:
         system = SystemMessage(
-            content=SYSTEM_PROMPT.format(candidate_profile=state["candidate_profile"])
+            content=SYSTEM_PROMPT.format(buyer_profile=state["buyer_profile"])
         )
         response = await model.ainvoke([system, *state["messages"]])
         return {"messages": [response], "react_steps": state["react_steps"] + 1}

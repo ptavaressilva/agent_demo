@@ -1,10 +1,10 @@
-"""Long-term memory: durable, cross-session state about a candidate.
+"""Long-term memory: durable, cross-session state about a buyer.
 
 Backed by a `langgraph.store.base.BaseStore` implementation over a plain
 Mongo collection. Unlike short-term memory (scoped to one session's
 checkpoint), items here are addressed by a hierarchical namespace
-(e.g. `("candidate", candidate_id, "preferences")`) and are meant to be read
-and written across many separate sessions -- job-search preferences learned
+(e.g. `("buyer", buyer_id, "preferences")`) and are meant to be read
+and written across many separate sessions -- house-search preferences learned
 in one conversation should inform the next one.
 
 Only `batch`/`abatch` are abstract on `BaseStore`; everything else (get, put,
@@ -42,7 +42,7 @@ class MongoLongTermStore(BaseStore):
     """Minimal namespace/key/value store over a Mongo collection.
 
     Search is filter-only (no vector/semantic ranking) -- adequate for
-    structured long-term facts like "preferred locations" or "salary floor".
+    structured long-term facts like "preferred neighborhoods" or "budget ceiling".
     """
 
     def __init__(self, client: MongoClient, collection_name: str = "long_term_memory") -> None:

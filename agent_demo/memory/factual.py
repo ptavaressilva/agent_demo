@@ -1,13 +1,13 @@
-"""Factual memory: a verified-facts knowledge base, separate from candidate
+"""Factual memory: a verified-facts knowledge base, separate from buyer
 preferences (long-term memory) and conversation history (short-term memory).
 
-Holds things the agent has confirmed while researching -- "Acme Corp's
-engineering org is fully remote", "Acme's last posted senior-IC band tops out
-at $210k" -- so future sessions don't re-derive them from scratch. Exposed to
-the agent as `remember_fact` / `recall_facts` tools (see
+Holds things the agent has confirmed while researching -- "Riverside's HOA
+caps rentals at 10% of units", "3-bed listings in Riverside topped out at
+$480k last quarter" -- so future sessions don't re-derive them from scratch.
+Exposed to the agent as `remember_fact` / `recall_facts` tools (see
 `agent_demo.tools.memory_tools`), not through the LangGraph `Store`
 injection used for long-term preferences, since facts are freeform research
-notes rather than structured per-candidate keys.
+notes rather than structured per-buyer keys.
 """
 
 from __future__ import annotations

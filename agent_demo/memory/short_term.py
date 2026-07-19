@@ -3,7 +3,7 @@
 Backed by LangGraph's `MongoDBSaver` checkpointer. This persists the full
 message history and graph state for a `thread_id` (== our `session_id`), so a
 session can be resumed across process restarts / AgentCore invocations.
-Scope is a single ongoing job search conversation -- it is *not* shared
+Scope is a single ongoing house search conversation -- it is *not* shared
 across sessions (that's what long-term memory is for).
 """
 

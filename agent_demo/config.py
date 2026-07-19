@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     mongo_uri: str = Field(default="mongodb://localhost:27017", alias="MONGO_URI")
     mongo_db_name: str = Field(default="agent_demo", alias="MONGO_DB_NAME")
 
-    # --- Postgres (job offers + ratings + application drafts) ---
+    # --- Postgres (house listings + ratings + viewing requests) ---
     postgres_dsn: str = Field(
         default="postgresql://agent_demo:agent_demo@localhost:5432/agent_demo",
         alias="POSTGRES_DSN",
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # --- Arize AX tracing ---
     arize_space_id: str = Field(default="", alias="ARIZE_SPACE_ID")
     arize_api_key: str = Field(default="", alias="ARIZE_API_KEY")
-    arize_project_name: str = Field(default="job-search-agent", alias="ARIZE_PROJECT_NAME")
+    arize_project_name: str = Field(default="house-search-agent", alias="ARIZE_PROJECT_NAME")
     tracing_enabled: bool = Field(default=True, alias="TRACING_ENABLED")
 
     # --- Agent behavior ---

@@ -19,7 +19,7 @@ app = BedrockAgentCoreApp()
 
 @app.entrypoint
 async def invoke(payload: dict) -> dict:
-    """payload: {"message": str, "candidate_id": str, "candidate_profile":
+    """payload: {"message": str, "buyer_id": str, "buyer_profile":
     str, "session_id"?: str} -- see agent_demo.runner.InvokeRequest."""
     result: InvokeResult = await run(payload)
     return {

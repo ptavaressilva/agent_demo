@@ -63,7 +63,7 @@ environment variable instead -- `agent_demo/llm.py` supports both.
 
 ```sh
 # From the repo root. Detects main.py as the entrypoint.
-agentcore configure --entrypoint main.py --name job-search-agent
+agentcore configure --entrypoint main.py --name house-search-agent
 
 # Cloud build + deploy (no local Docker required):
 agentcore deploy
@@ -81,9 +81,9 @@ regenerate the Dockerfile it needs rather than fighting it over the file.
 ## 4. Invoke
 
 ```sh
-agentcore invoke '{"message": "Find me senior backend roles in Lisbon", \
-  "candidate_id": "cand_123", \
-  "candidate_profile": "8 years backend, Python/Go, prefers remote-first EU companies"}'
+agentcore invoke '{"message": "Find me a 3-bedroom house in Lisbon", \
+  "buyer_id": "buyer_123", \
+  "buyer_profile": "Family of three, budget EUR 450k, wants a garden and good transit access"}'
 ```
 
 Response shape matches `main.py`'s `invoke()`:

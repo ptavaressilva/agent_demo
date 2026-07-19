@@ -5,8 +5,8 @@ without deploying anything -- `main.py` is a thin AgentCore adapter around
 
 Process-wide resources (Mongo client, Postgres pool, MCP tool connections)
 are created lazily and cached for the life of the process; only the parts
-that vary per request (job-persistence tools bound to `session_id`, memory
-tools bound to `candidate_id`, and the graph's own conversation state) are
+that vary per request (listing-persistence tools bound to `session_id`,
+memory tools bound to `buyer_id`, and the graph's own conversation state) are
 rebuilt per call.
 """
 
@@ -28,12 +28,12 @@ from agent_demo.memory.long_term import MongoLongTermStore
 from agent_demo.memory.short_term import build_checkpointer
 from agent_demo.tools.mcp_tools import load_mcp_tools
 from agent_demo.tools.memory_tools import build_memory_tools
-from agent_demo.tools.postgres_tools import build_job_tools, get_pool
+from agent_demo.tools.postgres_tools import build_listing_tools, get_pool
 from agent_demo.tracing.setup import configure_tracing
 
 
 class InvokeRequest(BaseModel):
-    """Validated shape of an incoming invocation. `candidate_profile` is the
+    """Validated shape of an incoming invocation. `buyer_profile` is the
     one field that crosses a real trust boundary (arbitrary per-request text
     from the caller) -- it flows only into the prompt, never into a tool
     call or query, so no further sanitization is required beyond this
@@ -41,8 +41,8 @@ class InvokeRequest(BaseModel):
     """
 
     message: str = Field(min_length=1, max_length=8000)
-    candidate_id: str = Field(min_length=1, max_length=200)
-    candidate_profile: str = Field(min_length=1, max_length=20000)
+    buyer_id: str = Field(min_length=1, max_length=200)
+    buyer_profile: str = Field(min_length=1, max_length=20000)
     session_id: str | None = None
 
 
@@ -87,8 +87,8 @@ async def run(payload: dict) -> InvokeResult:
 
     tools: list[BaseTool] = [
         *await _get_mcp_tools(),
-        *build_job_tools(pg_pool, session_id),
-        *build_memory_tools(factual_memory, long_term_store, request.candidate_id),
+        *build_listing_tools(pg_pool, session_id),
+        *build_memory_tools(factual_memory, long_term_store, request.buyer_id),
     ]
 
     model = await build_chat_model_with_fallback(tools)
@@ -99,8 +99,8 @@ async def run(payload: dict) -> InvokeResult:
         {
             "messages": [HumanMessage(content=request.message)],
             "session_id": session_id,
-            "candidate_id": request.candidate_id,
-            "candidate_profile": request.candidate_profile,
+            "buyer_id": request.buyer_id,
+            "buyer_profile": request.buyer_profile,
             "react_steps": 0,
             "correction_retries": 0,
         },

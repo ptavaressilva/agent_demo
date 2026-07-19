@@ -13,8 +13,8 @@ class AgentState(TypedDict):
 
     # Fixed for the lifetime of a session (set once, at graph invocation).
     session_id: str
-    candidate_id: str
-    candidate_profile: str
+    buyer_id: str
+    buyer_profile: str
 
     # ReAct loop bookkeeping.
     react_steps: int
