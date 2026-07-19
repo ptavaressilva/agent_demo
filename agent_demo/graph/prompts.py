@@ -47,3 +47,8 @@ GIVE_UP_PROMPT = """You've hit the retry limit for self-correcting the \
 failed tool call above. Do not attempt that action again. Summarize what \
 you were able to accomplish so far, note what failed and why (briefly), and \
 suggest what the buyer could do next -- then stop."""
+
+STEP_BUDGET_PROMPT = """You've reached the step budget for this turn -- do \
+not call any more tools. Summarize what you've found and drafted so far, \
+note anything you didn't get to, and suggest what the buyer could ask next \
+-- then stop."""

@@ -95,6 +95,12 @@ class MongoLongTermStore(BaseStore):
                     results.append(None)
             elif isinstance(op, SearchOp):
                 # Prefix match: namespace array must start with namespace_prefix.
+                # NOTE: this pulls every document matching the coarse Mongo
+                # `$all` pre-filter into Python before the exact-prefix check
+                # and offset/limit slice below -- fine at demo scale (a
+                # handful of buyers/preferences), but not a real pagination
+                # strategy. A production store should push the prefix match
+                # and slicing into the Mongo query itself.
                 prefix = list(op.namespace_prefix)
                 cursor = self._collection.find(
                     {} if not prefix else {"namespace": {"$all": prefix}}

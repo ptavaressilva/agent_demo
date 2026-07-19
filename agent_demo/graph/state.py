@@ -16,6 +16,13 @@ class AgentState(TypedDict):
     buyer_id: str
     buyer_profile: str
 
+    # Budgets for this run. Default to `settings.max_react_steps` /
+    # `settings.max_self_correction_retries`; a caller may override either
+    # per-request (see `InvokeRequest`) for a "quick" vs. "thorough" run.
+    max_react_steps: int
+    max_self_correction_retries: int
+
     # ReAct loop bookkeeping.
     react_steps: int
     correction_retries: int
+    budget_stop_issued: bool

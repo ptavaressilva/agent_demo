@@ -45,12 +45,43 @@ class InvokeRequest(BaseModel):
     buyer_profile: str = Field(min_length=1, max_length=20000)
     session_id: str | None = None
 
+    # Optional per-request overrides of the process-wide defaults in
+    # `settings`, e.g. a "quick look" request that should stop sooner.
+    max_react_steps: int | None = Field(default=None, ge=1, le=50)
+    max_self_correction_retries: int | None = Field(default=None, ge=0, le=10)
+
 
 @dataclass
 class InvokeResult:
     session_id: str
     reply: str
     message_count: int
+
+
+_NO_REPLY_FALLBACK = (
+    "(No summary was produced for this turn -- the agent may have run out "
+    "of steps mid-action. Try again or ask for a status update.)"
+)
+
+
+def _extract_reply(messages: list) -> str:
+    """The last non-empty text content among the AIMessages in `messages`.
+
+    The graph's step-budget/retry-limit grace turns are designed to always
+    produce real summary text (see graph.py's `budget_stop` node and
+    `GIVE_UP_PROMPT`), but that's a model-compliance guarantee, not a
+    structural one -- a grace turn could still reply with only a
+    (now-discarded) tool call and no text. Never surface a silent empty
+    string to the caller in that case.
+    """
+    return next(
+        (
+            message.content
+            for message in reversed(messages)
+            if isinstance(message, AIMessage) and isinstance(message.content, str) and message.content
+        ),
+        _NO_REPLY_FALLBACK,
+    )
 
 
 _mongo_client: MongoClient | None = None
@@ -101,18 +132,18 @@ async def run(payload: dict) -> InvokeResult:
             "session_id": session_id,
             "buyer_id": request.buyer_id,
             "buyer_profile": request.buyer_profile,
+            "max_react_steps": request.max_react_steps or settings.max_react_steps,
+            "max_self_correction_retries": (
+                request.max_self_correction_retries
+                if request.max_self_correction_retries is not None
+                else settings.max_self_correction_retries
+            ),
             "react_steps": 0,
             "correction_retries": 0,
+            "budget_stop_issued": False,
         },
         config=graph_config,
     )
 
-    reply = next(
-        (
-            message.content
-            for message in reversed(result["messages"])
-            if isinstance(message, AIMessage) and isinstance(message.content, str) and message.content
-        ),
-        "",
-    )
+    reply = _extract_reply(result["messages"])
     return InvokeResult(session_id=session_id, reply=reply, message_count=len(result["messages"]))

@@ -64,12 +64,45 @@ curl -X POST localhost:8080/invocations -H 'content-type: application/json' -d '
 }'
 ```
 
+`max_react_steps` and `max_self_correction_retries` (process-wide defaults in
+`agent_demo/config.py`) can also be overridden per-request by adding either
+field, e.g. `"max_react_steps": 4`, to the JSON body above -- useful for a
+"quick look" call that should stop sooner than the default.
+
 Web search defaults to the reference Brave Search MCP server -- set
 `BRAVE_API_KEY` in `.env`, or swap `MCP_WEB_SEARCH_COMMAND`/`MCP_WEB_SEARCH_ARGS`
 for a different MCP-compatible provider (Exa, Tavily, ...). Tracing
 (`ARIZE_SPACE_ID`/`ARIZE_API_KEY`) and the AgentCore deployment path are both
 optional for local dev -- everything else runs against real Anthropic/Mongo/
 Postgres/MCP services with just the steps above.
+
+## Testing
+
+The graph's control flow (self-correction, retry give-up, step-budget
+grace turn) is tested in isolation against a fake model and LangGraph's
+in-memory checkpointer/store -- no Mongo/Postgres/MCP/Anthropic services
+required:
+
+```sh
+uv sync --group dev
+uv run pytest
+```
+
+## Known limitations
+
+- **Prompt injection surface.** `buyer_profile` and the user's `message`
+  (see `InvokeRequest` in `agent_demo/runner.py`) are untrusted text that
+  flows directly into the system/human prompt of an agent with real side
+  effects: it writes to Postgres (`house_listings`, `listing_ratings`,
+  `viewing_requests`) and to long-term/factual memory in Mongo. The same
+  applies to content pulled in by the `fetch` MCP tool -- a scraped listing
+  page is also untrusted text the model reads. Nothing here defends against
+  a crafted profile or page trying to steer the agent into unwanted tool
+  calls (e.g. spamming `draft_viewing_request`). The design keeps the worst
+  case bounded -- viewing requests are always drafts a human must send, and
+  `max_react_steps`/`max_self_correction_retries` cap runaway tool use --
+  but there's no explicit injection defense (e.g. tagging/quoting untrusted
+  content, or a guardrail pass) beyond that.
 
 ## Deploying
 
