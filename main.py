@@ -20,12 +20,15 @@ app = BedrockAgentCoreApp()
 @app.entrypoint
 async def invoke(payload: dict) -> dict:
     """payload: {"message": str, "buyer_id": str, "buyer_profile":
-    str, "session_id"?: str} -- see agent_demo.runner.InvokeRequest."""
+    str, "session_id"?: str} -- or, to resume a run paused for human
+    approval, {"session_id": str, "buyer_id": str, "resume_decision": dict}.
+    See agent_demo.runner.InvokeRequest."""
     result: InvokeResult = await run(payload)
     return {
         "session_id": result.session_id,
         "reply": result.reply,
         "message_count": result.message_count,
+        "pending_approval": result.pending_approval,
     }
 
 

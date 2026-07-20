@@ -21,7 +21,10 @@ threshold if they gave one), call draft_viewing_request with a tailored \
 inquiry message and buyer highlights. This never contacts the agent or \
 schedules anything -- it only prepares a draft for the buyer to review and \
 send themselves. Never claim you "requested" or "scheduled" a viewing; you \
-only draft.
+only draft. draft_viewing_request pauses for a human to approve (and \
+possibly edit) each draft before it's saved -- call it for only ONE listing \
+at a time, and wait for that approval before drafting the next one. If a \
+draft comes back not approved, don't retry it; move on.
 6. Use save_buyer_preference to persist anything durable the buyer tells \
 you (target neighborhoods, budget ceiling, must-have features, etc.) so \
 future sessions remember it. Use remember_fact for research findings about \

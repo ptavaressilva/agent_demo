@@ -14,6 +14,7 @@ from pathlib import Path
 
 import asyncpg
 from langchain_core.tools import BaseTool, tool
+from langgraph.types import interrupt
 
 from agent_demo.config import settings
 
@@ -176,7 +177,33 @@ def build_listing_tools(pool: asyncpg.Pool, session_id: str) -> list[BaseTool]:
         This tool never contacts the listing agent or schedules anything --
         it only persists a draft. Only draft for listings the buyer would
         want to view (check list_rated_listings first).
+
+        Pauses for human approval before saving anything: the buyer (or
+        whoever is supervising the session) must approve the draft's content
+        first. If they edit the message/highlights/notes during review, the
+        edited text is what gets saved, not your original draft.
         """
+        decision = interrupt(
+            {
+                "action": "draft_viewing_request",
+                "listing_id": listing_id,
+                "inquiry_message": inquiry_message,
+                "buyer_highlights": buyer_highlights,
+                "notes_for_buyer": notes_for_buyer,
+                "message": "Approve drafting this viewing request for the buyer to review?",
+            }
+        )
+        if not isinstance(decision, dict) or decision.get("action") != "approve":
+            return (
+                "The viewing request draft was not approved, so nothing was "
+                "saved. Do not retry this draft -- move on to other listings "
+                "or wrap up."
+            )
+
+        inquiry_message = decision.get("inquiry_message", inquiry_message)
+        buyer_highlights = decision.get("buyer_highlights", buyer_highlights)
+        notes_for_buyer = decision.get("notes_for_buyer", notes_for_buyer)
+
         async with pool.acquire() as conn:
             try:
                 await conn.execute(

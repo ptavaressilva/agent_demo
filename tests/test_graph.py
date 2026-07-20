@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
+from langgraph.types import Command, interrupt
 
 from agent_demo.graph.graph import build_graph
 from agent_demo.graph.prompts import CORRECTION_PROMPT, GIVE_UP_PROMPT, STEP_BUDGET_PROMPT
@@ -41,6 +42,16 @@ async def good_tool(x: str) -> str:
 async def bad_tool(x: str) -> str:
     """A tool that always fails, using this repo's error-string convention."""
     return "Error: always fails"
+
+
+@tool
+async def approval_tool(x: str) -> str:
+    """A tool that pauses for human approval before acting, mirroring
+    draft_viewing_request's interrupt()-before-side-effect shape."""
+    decision = interrupt({"action": "approval_tool", "x": x})
+    if not isinstance(decision, dict) or decision.get("action") != "approve":
+        return "declined"
+    return f"approved:{decision.get('x', x)}"
 
 
 def _initial_state(
@@ -194,3 +205,83 @@ async def test_step_budget_ignores_tool_calls_from_the_grace_turn_itself():
     assert model.calls == 2
     assert result["messages"][-1].content == "one more search, I promise"
     assert not any(isinstance(m, ToolMessage) for m in result["messages"])
+
+
+async def test_tool_interrupt_pauses_until_resumed_then_completes_on_approve():
+    model = FakeModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "approval_tool", "args": {"x": "1"}, "id": "call_1"}],
+            ),
+            AIMessage(content="Done after approval."),
+        ]
+    )
+    graph = build_graph(model, [approval_tool], InMemorySaver(), InMemoryStore())
+    config = {"configurable": {"thread_id": "t6"}}
+
+    paused = await graph.ainvoke(_initial_state(), config=config)
+
+    assert paused["__interrupt__"][0].value == {"action": "approval_tool", "x": "1"}
+    # The graph genuinely stopped before running the tool and before the
+    # agent's second scripted turn -- not just before returning.
+    assert model.calls == 1
+
+    resumed = await graph.ainvoke(Command(resume={"action": "approve"}), config=config)
+
+    assert resumed["messages"][-1].content == "Done after approval."
+    assert any(
+        isinstance(m, ToolMessage) and m.content == "approved:1" for m in resumed["messages"]
+    )
+
+
+async def test_tool_interrupt_resumes_on_a_freshly_built_graph_object():
+    """Production resumes across separate AgentCore invocations, each
+    building a brand-new `graph` object from a shared (Mongo-backed)
+    checkpointer -- never the same in-process `graph` twice. Prove resume
+    depends only on the checkpointer, not on any in-process graph state, by
+    building two independent `build_graph` objects here that share nothing
+    but the checkpointer instance."""
+    checkpointer = InMemorySaver()
+    config = {"configurable": {"thread_id": "t8"}}
+
+    model_1 = FakeModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "approval_tool", "args": {"x": "1"}, "id": "call_1"}],
+            )
+        ]
+    )
+    graph_1 = build_graph(model_1, [approval_tool], checkpointer, InMemoryStore())
+    paused = await graph_1.ainvoke(_initial_state(), config=config)
+    assert paused["__interrupt__"][0].value == {"action": "approval_tool", "x": "1"}
+
+    model_2 = FakeModel([AIMessage(content="Done after approval.")])
+    graph_2 = build_graph(model_2, [approval_tool], checkpointer, InMemoryStore())
+    resumed = await graph_2.ainvoke(Command(resume={"action": "approve"}), config=config)
+
+    assert resumed["messages"][-1].content == "Done after approval."
+    assert any(
+        isinstance(m, ToolMessage) and m.content == "approved:1" for m in resumed["messages"]
+    )
+
+
+async def test_tool_interrupt_reject_skips_the_side_effect():
+    model = FakeModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "approval_tool", "args": {"x": "1"}, "id": "call_1"}],
+            ),
+            AIMessage(content="Okay, skipped that one."),
+        ]
+    )
+    graph = build_graph(model, [approval_tool], InMemorySaver(), InMemoryStore())
+    config = {"configurable": {"thread_id": "t7"}}
+
+    await graph.ainvoke(_initial_state(), config=config)
+    resumed = await graph.ainvoke(Command(resume={"action": "reject"}), config=config)
+
+    assert resumed["messages"][-1].content == "Okay, skipped that one."
+    assert any(isinstance(m, ToolMessage) and m.content == "declined" for m in resumed["messages"])

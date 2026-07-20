@@ -17,7 +17,8 @@ from dataclasses import dataclass
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
+from langgraph.types import Command
+from pydantic import BaseModel, Field, model_validator
 from pymongo import MongoClient
 
 from agent_demo.config import settings
@@ -40,9 +41,9 @@ class InvokeRequest(BaseModel):
     length/type check.
     """
 
-    message: str = Field(min_length=1, max_length=8000)
+    message: str | None = Field(default=None, min_length=1, max_length=8000)
     buyer_id: str = Field(min_length=1, max_length=200)
-    buyer_profile: str = Field(min_length=1, max_length=20000)
+    buyer_profile: str | None = Field(default=None, max_length=20000)
     session_id: str | None = None
 
     # Optional per-request overrides of the process-wide defaults in
@@ -50,17 +51,47 @@ class InvokeRequest(BaseModel):
     max_react_steps: int | None = Field(default=None, ge=1, le=50)
     max_self_correction_retries: int | None = Field(default=None, ge=0, le=10)
 
+    # Set to resume a run paused on a human-in-the-loop approval (see
+    # draft_viewing_request's `interrupt()` call) instead of starting a new
+    # turn -- e.g. {"action": "approve"} or {"action": "reject"}, optionally
+    # with edited fields that override the tool's original arguments.
+    # Crosses the same trust boundary as `buyer_profile`: arbitrary
+    # per-request data that, on approval, flows straight into a tool's DB
+    # write, so it gets the same length/type check and no more.
+    resume_decision: dict[str, str] | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def _validate_message_xor_resume(self) -> "InvokeRequest":
+        if self.resume_decision is not None:
+            if not self.session_id:
+                raise ValueError("resume_decision requires an existing session_id.")
+            if any(len(value) > 20000 for value in self.resume_decision.values()):
+                raise ValueError("resume_decision values must each be at most 20000 characters.")
+        elif not self.message or not self.buyer_profile:
+            raise ValueError("message and buyer_profile are required unless resuming with resume_decision.")
+        return self
+
 
 @dataclass
 class InvokeResult:
     session_id: str
     reply: str
     message_count: int
+    # Set when the run paused on a human-in-the-loop approval instead of
+    # finishing -- the interrupt's payload (see draft_viewing_request).
+    # Resume by calling `run()` again with the same session_id and a
+    # `resume_decision`.
+    pending_approval: dict | None = None
 
 
 _NO_REPLY_FALLBACK = (
     "(No summary was produced for this turn -- the agent may have run out "
     "of steps mid-action. Try again or ask for a status update.)"
+)
+
+_PENDING_APPROVAL_REPLY = (
+    "(Paused for approval -- see pending_approval. Resume by calling again "
+    "with the same session_id and a resume_decision.)"
 )
 
 
@@ -102,10 +133,40 @@ async def _get_mcp_tools() -> list[BaseTool]:
     return _mcp_tools
 
 
+def _build_graph_input(request: InvokeRequest, session_id: str) -> dict | Command:
+    """The input to feed `graph.ainvoke`: a `Command(resume=...)` if this
+    call is responding to a pending human-in-the-loop approval, otherwise a
+    fresh turn's initial state.
+
+    A resumed run's state comes entirely from the checkpoint LangGraph
+    already has for `session_id` -- never merge the two, or you'd be
+    re-seeding react_steps/correction_retries/etc. alongside the resume
+    value instead of continuing from where the interrupt paused.
+    """
+    if request.resume_decision is not None:
+        return Command(resume=request.resume_decision)
+    return {
+        "messages": [HumanMessage(content=request.message)],
+        "session_id": session_id,
+        "buyer_id": request.buyer_id,
+        "buyer_profile": request.buyer_profile,
+        "max_react_steps": request.max_react_steps or settings.max_react_steps,
+        "max_self_correction_retries": (
+            request.max_self_correction_retries
+            if request.max_self_correction_retries is not None
+            else settings.max_self_correction_retries
+        ),
+        "react_steps": 0,
+        "correction_retries": 0,
+        "budget_stop_issued": False,
+    }
+
+
 async def run(payload: dict) -> InvokeResult:
     """Handle one agent turn end-to-end: build the tool/model/graph stack
     for this request, run the ReAct + self-correction loop, and return the
-    agent's reply."""
+    agent's reply -- or, if a tool (e.g. draft_viewing_request) paused for
+    human approval, return that pending approval instead."""
     configure_tracing()
     request = InvokeRequest.model_validate(payload)
     session_id = request.session_id or str(uuid.uuid4())
@@ -126,24 +187,15 @@ async def run(payload: dict) -> InvokeResult:
     graph = build_graph(model, tools, checkpointer, long_term_store)
 
     graph_config = {"configurable": {"thread_id": session_id}}
-    result = await graph.ainvoke(
-        {
-            "messages": [HumanMessage(content=request.message)],
-            "session_id": session_id,
-            "buyer_id": request.buyer_id,
-            "buyer_profile": request.buyer_profile,
-            "max_react_steps": request.max_react_steps or settings.max_react_steps,
-            "max_self_correction_retries": (
-                request.max_self_correction_retries
-                if request.max_self_correction_retries is not None
-                else settings.max_self_correction_retries
-            ),
-            "react_steps": 0,
-            "correction_retries": 0,
-            "budget_stop_issued": False,
-        },
-        config=graph_config,
-    )
+    result = await graph.ainvoke(_build_graph_input(request, session_id), config=graph_config)
+
+    if pending := result.get("__interrupt__"):
+        return InvokeResult(
+            session_id=session_id,
+            reply=_PENDING_APPROVAL_REPLY,
+            message_count=len(result.get("messages", [])),
+            pending_approval=pending[0].value,
+        )
 
     reply = _extract_reply(result["messages"])
     return InvokeResult(session_id=session_id, reply=reply, message_count=len(result["messages"]))

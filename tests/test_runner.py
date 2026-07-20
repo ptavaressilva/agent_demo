@@ -6,9 +6,11 @@ that doesn't depend on them.
 
 from __future__ import annotations
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.types import Command
 
-from agent_demo.runner import _NO_REPLY_FALLBACK, _extract_reply
+from agent_demo.runner import _NO_REPLY_FALLBACK, InvokeRequest, _build_graph_input, _extract_reply
 
 
 def test_extract_reply_returns_last_text_message():
@@ -34,3 +36,40 @@ def test_extract_reply_falls_back_when_no_ai_text_exists_at_all():
         AIMessage(content="", tool_calls=[{"name": "good_tool", "args": {}, "id": "1"}]),
     ]
     assert _extract_reply(messages) == _NO_REPLY_FALLBACK
+
+
+def test_build_graph_input_returns_fresh_state_for_a_new_turn():
+    request = InvokeRequest(
+        message="find me a house",
+        buyer_id="b1",
+        buyer_profile="Family of three, budget EUR 450k",
+    )
+
+    graph_input = _build_graph_input(request, session_id="s1")
+
+    assert graph_input["messages"] == [HumanMessage(content="find me a house")]
+    assert graph_input["buyer_id"] == "b1"
+    assert graph_input["react_steps"] == 0
+    assert graph_input["budget_stop_issued"] is False
+
+
+def test_build_graph_input_returns_a_bare_resume_command_without_reseeding_state():
+    request = InvokeRequest(
+        buyer_id="b1",
+        session_id="s1",
+        resume_decision={"action": "approve"},
+    )
+
+    graph_input = _build_graph_input(request, session_id="s1")
+
+    assert graph_input == Command(resume={"action": "approve"})
+
+
+def test_resume_decision_requires_an_existing_session_id():
+    with pytest.raises(ValueError):
+        InvokeRequest(buyer_id="b1", resume_decision={"action": "approve"})
+
+
+def test_message_and_buyer_profile_required_when_not_resuming():
+    with pytest.raises(ValueError):
+        InvokeRequest(buyer_id="b1")
