@@ -34,7 +34,7 @@ needs your AWS account/credentials and hasn't been executed.
 - An MCP web-search provider reachable from the container (e.g. a Brave API
   key, or swap `MCP_WEB_SEARCH_COMMAND`/`ARGS` for a hosted MCP server over
   `streamable_http` instead of stdio if you'd rather not run `npx` in the
-  container -- see `agent_demo/tools/mcp_tools.py`).
+  container -- see `agent_demo/lib/mcp_tools.py`).
 - Arize AX space ID + API key, if you want tracing (`ARIZE_SPACE_ID`,
   `ARIZE_API_KEY`).
 
@@ -45,8 +45,8 @@ gateway (LiteLLM proxy) over `LLM_GATEWAY_BASE_URL`, and the *gateway*
 (not this container) holds `ANTHROPIC_API_KEY`. The only secret this
 container needs is the gateway's own key. Rather than baking
 `LLM_GATEWAY_API_KEY` into the container/environment, store it as an
-AgentCore Identity API-key credential provider and let `agent_demo/llm.py`
-resolve it per-call (`LLM_GATEWAY_AUTH_MODE=agentcore_identity`, already set
+AgentCore Identity API-key credential provider and let
+`agent_demo/platform/llm.py` resolve it per-call (`LLM_GATEWAY_AUTH_MODE=agentcore_identity`, already set
 in `deployment/Dockerfile`). The starter-toolkit CLI only wraps OAuth2
 providers, not API-key ones, so create it directly via boto3:
 
@@ -67,7 +67,7 @@ credential provider at runtime.
 
 If you'd rather keep it simple for a first deployment, leave
 `LLM_GATEWAY_AUTH_MODE=env` and set `LLM_GATEWAY_API_KEY` as a plain Runtime
-environment variable instead -- `agent_demo/llm.py` supports both. Either
+environment variable instead -- `agent_demo/platform/llm.py` supports both. Either
 way, also set `LLM_GATEWAY_BASE_URL` to the gateway's real (non-localhost)
 endpoint.
 
@@ -105,9 +105,10 @@ Response shape matches `main.py`'s `invoke()`:
 
 ## 5. Kill switch
 
-`agent_demo/kill_switch.py` gates every invocation (new turns and resumed
-approvals) on a flag stored in Mongo, so an incident can be contained
-without a redeploy. `main.py` serves it at `/admin/kill-switch`:
+`agent_demo/platform/kill_switch.py` gates every invocation (new turns and
+resumed approvals), for whichever agent this deployment serves, on a flag
+stored in Mongo, so an incident can be contained without a redeploy.
+`main.py` serves it at `/admin/kill-switch`:
 
 ```sh
 # Check status
@@ -173,5 +174,5 @@ uv run python -m main         # serves /invocations and /ping on :8080, same
                                # contract AgentCore Runtime uses in prod
 ```
 
-or call `agent_demo.runner.run(...)` directly/in a test, bypassing the HTTP
-layer entirely -- see `scripts/run_local.py`.
+or call `agent_demo.platform.harness.run(agent, ...)` directly/in a test,
+bypassing the HTTP layer entirely -- see `scripts/run_local.py`.

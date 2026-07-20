@@ -1,9 +1,13 @@
 """AWS Bedrock AgentCore entrypoint.
 
-This is a thin adapter: all real logic lives in `agent_demo.runner.run`,
-which is plain async Python testable without AgentCore. Deploy with the
-`bedrock-agentcore-starter-toolkit` CLI (`agentcore configure` /
-`agentcore launch`) -- see deployment/README.md. Run locally for dev/testing
+This is a thin adapter, fully agent-agnostic: which agent this process serves
+is chosen by `AGENT_ID` (see `agent_demo.platform.registry`), and all real
+orchestration logic lives in `agent_demo.platform.harness.run`, which is
+plain async Python testable without AgentCore. This file has no import from
+any `agent_demo.agents.*` package beyond the registry lookup -- swapping
+`AGENT_ID` to serve a different registered agent requires no changes here.
+Deploy with the `bedrock-agentcore-starter-toolkit` CLI (`agentcore configure`
+/ `agentcore launch`) -- see deployment/README.md. Run locally for dev/testing
 with `uv run main.py`, which serves the same `/invocations` and `/ping`
 routes on http://localhost:8080 that AgentCore Runtime calls in production.
 
@@ -25,9 +29,9 @@ Kill switch: two ways to reach it, sharing one dispatcher
   body as a `token` field rather than a header. This is the one to use when
   deployed exclusively behind managed AgentCore Runtime.
 
-Either way, enforcement (`run()` refusing to act while killed) works
-identically on both the managed invoke path and plain HTTP -- only the
-*toggle* surface differs in reachability.
+Either way, enforcement (`harness.run()` refusing to act while killed) works
+identically on both the managed invoke path and plain HTTP, for whichever
+agent is registered -- only the *toggle* surface differs in reachability.
 """
 
 from __future__ import annotations
@@ -40,30 +44,36 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from agent_demo.config import settings
-from agent_demo.kill_switch import AgentKilledError, KillSwitch
-from agent_demo.runner import InvokeResult, get_mongo_client, run
+from agent_demo.platform import harness
+from agent_demo.platform.config import platform_settings
+from agent_demo.platform.envelope import InvokeResult
+from agent_demo.platform.kill_switch import AgentKilledError, KillSwitch
+from agent_demo.platform.mongo import get_mongo_client
+from agent_demo.platform.registry import load_agent
 
 app = BedrockAgentCoreApp()
+AGENT = load_agent()
 
 _ADMIN_ACTION_KEY = "_kill_switch_admin_action"
 
 
 @app.entrypoint
 async def invoke(payload: dict) -> dict | Response:
-    """payload: {"message": str, "buyer_id": str, "buyer_profile":
-    str, "session_id"?: str} -- or, to resume a run paused for human
-    approval, {"session_id": str, "buyer_id": str, "resume_decision": dict}.
-    See agent_demo.runner.InvokeRequest.
+    """payload shape depends on `AGENT.request_schema` (see
+    agent_demo.platform.envelope.BaseInvokeEnvelope and each agent's own
+    subclass) -- e.g. for the default house-search agent: {"message": str,
+    "buyer_id": str, "buyer_profile": str, "session_id"?: str}, or, to
+    resume a run paused for human approval, {"session_id": str, "buyer_id":
+    str, "resume_decision": dict}.
 
     A payload containing `_kill_switch_admin_action` is instead routed to
     the in-band kill-switch admin action (see module docstring) and never
-    reaches `run()`/the normal buyer flow."""
+    reaches `harness.run()`/the normal agent flow."""
     if isinstance(payload, dict) and _ADMIN_ACTION_KEY in payload:
         return await _handle_kill_switch_admin_action(payload[_ADMIN_ACTION_KEY])
 
     try:
-        result: InvokeResult = await run(payload)
+        result: InvokeResult = await harness.run(AGENT, payload)
     except AgentKilledError as e:
         return JSONResponse({"error": "agent_disabled", "reason": e.reason}, status_code=503)
     return {
@@ -89,13 +99,13 @@ async def _dispatch_kill_switch_action(token: object, body: dict) -> tuple[dict,
     Fails closed: an unset `KILL_SWITCH_ADMIN_TOKEN` is a 500 (misconfigured),
     never treated as "no auth required".
     """
-    if not settings.kill_switch_admin_token:
+    if not platform_settings.kill_switch_admin_token:
         return {
             "error": "Kill switch admin endpoint is not configured (set KILL_SWITCH_ADMIN_TOKEN)."
         }, 500
 
     if not isinstance(token, str) or not hmac.compare_digest(
-        token.encode("utf-8"), settings.kill_switch_admin_token.encode("utf-8")
+        token.encode("utf-8"), platform_settings.kill_switch_admin_token.encode("utf-8")
     ):
         return {"error": "Unauthorized"}, 401
 
