@@ -57,5 +57,12 @@ class Settings(BaseSettings):
     max_react_steps: int = Field(default=12, alias="MAX_REACT_STEPS")
     max_self_correction_retries: int = Field(default=2, alias="MAX_SELF_CORRECTION_RETRIES")
 
+    # --- Kill switch ---
+    # Shared secret checked against the X-Admin-Token header on the
+    # /admin/kill-switch endpoint (see main.py). Left empty by default so the
+    # endpoint fails closed (rejects every request) until an operator
+    # deliberately sets it, rather than defaulting to open.
+    kill_switch_admin_token: str = Field(default="", alias="KILL_SWITCH_ADMIN_TOKEN")
+
 
 settings = Settings()  # type: ignore[call-arg]

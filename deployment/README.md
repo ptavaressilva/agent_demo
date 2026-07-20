@@ -91,7 +91,67 @@ Response shape matches `main.py`'s `invoke()`:
 `session_id` back in on the next call to continue the same conversation
 (the checkpointer resumes short-term memory for that thread).
 
-## 5. Local dev without AgentCore at all
+## 5. Kill switch
+
+`agent_demo/kill_switch.py` gates every invocation (new turns and resumed
+approvals) on a flag stored in Mongo, so an incident can be contained
+without a redeploy. `main.py` serves it at `/admin/kill-switch`:
+
+```sh
+# Check status
+curl -H "X-Admin-Token: $KILL_SWITCH_ADMIN_TOKEN" http://localhost:8080/admin/kill-switch
+
+# Engage it
+curl -X POST -H "X-Admin-Token: $KILL_SWITCH_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"killed": true, "reason": "investigating runaway tool calls"}' \
+  http://localhost:8080/admin/kill-switch
+
+# Release it
+curl -X POST -H "X-Admin-Token: $KILL_SWITCH_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"killed": false}' \
+  http://localhost:8080/admin/kill-switch
+```
+
+Set `KILL_SWITCH_ADMIN_TOKEN` (both toggle surfaces below fail closed if it's
+unset).
+
+**`/admin/kill-switch` is a plain HTTP route on the container, not an
+AgentCore Runtime action.** It works locally and for any deployment
+reachable over plain HTTP (e.g. behind your own ALB). It is *not* reachable
+through the managed AgentCore Runtime invoke path (`agentcore invoke` / the
+`InvokeAgentRuntime` API), which only exposes `/invocations`.
+
+If you deploy behind that path exclusively, use the in-band equivalent
+instead -- a `_kill_switch_admin_action` key inside the `/invocations`
+payload itself, which `main.py`'s `invoke()` intercepts before it ever
+reaches the normal buyer flow. Auth travels in the body (a `token` field)
+rather than a header, since the payload is the one thing guaranteed to cross
+the managed invoke path unmodified:
+
+```sh
+# Check status
+agentcore invoke '{"_kill_switch_admin_action": {"token": "'"$KILL_SWITCH_ADMIN_TOKEN"'"}}'
+
+# Engage it
+agentcore invoke '{"_kill_switch_admin_action": {"token": "'"$KILL_SWITCH_ADMIN_TOKEN"'", \
+  "killed": true, "reason": "investigating runaway tool calls"}}'
+
+# Release it
+agentcore invoke '{"_kill_switch_admin_action": {"token": "'"$KILL_SWITCH_ADMIN_TOKEN"'", "killed": false}}'
+```
+
+Both surfaces share the same underlying `KillSwitch`/Mongo state, so either
+one can release a switch the other engaged. As a last resort (e.g. the
+token is lost), a direct write to the `kill_switch` Mongo collection also
+works (`KillSwitch(client).set_killed(...)`).
+
+Engaging the switch blocks new turns/resumes (via either surface); it does
+not abort a run already mid-loop (each run is bounded by `max_react_steps`
+regardless).
+
+## 6. Local dev without AgentCore at all
 
 You don't need any of the above to iterate on the agent itself:
 

@@ -23,6 +23,7 @@ from pymongo import MongoClient
 
 from agent_demo.config import settings
 from agent_demo.graph.graph import build_graph
+from agent_demo.kill_switch import KillSwitch
 from agent_demo.llm import build_chat_model_with_fallback
 from agent_demo.memory.factual import FactualMemory
 from agent_demo.memory.long_term import MongoLongTermStore
@@ -119,7 +120,10 @@ _mongo_client: MongoClient | None = None
 _mcp_tools: list[BaseTool] | None = None
 
 
-def _get_mongo_client() -> MongoClient:
+def get_mongo_client() -> MongoClient:
+    """Process-wide Mongo client. Public (not `_`-prefixed) because
+    `main.py`'s admin kill-switch endpoint shares it too -- there's exactly
+    one Mongo connection pool per process, not one per caller."""
     global _mongo_client
     if _mongo_client is None:
         _mongo_client = MongoClient(settings.mongo_uri)
@@ -166,12 +170,18 @@ async def run(payload: dict) -> InvokeResult:
     """Handle one agent turn end-to-end: build the tool/model/graph stack
     for this request, run the ReAct + self-correction loop, and return the
     agent's reply -- or, if a tool (e.g. draft_viewing_request) paused for
-    human approval, return that pending approval instead."""
+    human approval, return that pending approval instead.
+
+    Raises `AgentKilledError` before doing any other work -- including
+    Postgres/MCP setup and, notably, before resuming a paused approval -- if
+    an operator has engaged the kill switch (see agent_demo.kill_switch)."""
     configure_tracing()
     request = InvokeRequest.model_validate(payload)
     session_id = request.session_id or str(uuid.uuid4())
 
-    mongo_client = _get_mongo_client()
+    mongo_client = get_mongo_client()
+    KillSwitch(mongo_client).check()
+
     checkpointer = build_checkpointer(mongo_client)
     long_term_store = MongoLongTermStore(mongo_client)
     factual_memory = FactualMemory(mongo_client)
