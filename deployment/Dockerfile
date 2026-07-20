@@ -13,7 +13,7 @@ ENV UV_SYSTEM_PYTHON=1 \
     UV_NO_PROGRESS=1 \
     PYTHONUNBUFFERED=1 \
     DOCKER_CONTAINER=1 \
-    ANTHROPIC_AUTH_MODE=agentcore_identity
+    LLM_GATEWAY_AUTH_MODE=agentcore_identity
 
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project

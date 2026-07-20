@@ -9,6 +9,9 @@ and drafts (never sends) a tailored viewing request.
   forever on the same broken call.
 - **Claude Opus 4.8** as the primary model, falling back to **Claude Haiku
   4.5** automatically via LangChain's `.with_fallbacks(...)`.
+- **LLM gateway** (LiteLLM proxy) in front of both models -- the agent holds
+  only a gateway key; Anthropic credentials, routing, and per-model config
+  live in `litellm_config.yaml` on the gateway, not in the app.
 - **MCP servers** for web search and page fetching (swappable provider).
 - **MongoDB** for three distinct memory tiers: short-term (per-session
   conversation state, via a LangGraph checkpointer), long-term (durable
@@ -30,7 +33,8 @@ never contacts the listing agent or schedules anything itself. See
 ```
 main.py (AgentCore entrypoint)
   -> agent_demo/runner.py: run(payload)      # validate, build stack, invoke graph
-       -> agent_demo/llm.py                  # Opus 4.8 -> Haiku 4.5 fallback
+       -> agent_demo/llm.py                  # Opus 4.8 -> Haiku 4.5 fallback, via LLM gateway
+            -> litellm proxy (:4000)         # holds ANTHROPIC_API_KEY, routes to Anthropic
        -> agent_demo/graph/graph.py          # StateGraph: agent <-> tools -> critic
        -> agent_demo/tools/
             mcp_tools.py                     # web_search, fetch (via MCP)
@@ -45,11 +49,12 @@ main.py (AgentCore entrypoint)
 
 ## Local development
 
-Requires Python 3.13, `uv`, and Docker (for local Mongo/Postgres).
+Requires Python 3.13, `uv`, and Docker (for local Mongo/Postgres/the LLM
+gateway).
 
 ```sh
-cp .env.example .env        # fill in ANTHROPIC_API_KEY at minimum
-docker compose up -d        # local MongoDB + Postgres
+cp .env.example .env        # fill in ANTHROPIC_API_KEY and LLM_GATEWAY_API_KEY at minimum
+docker compose up -d        # local MongoDB + Postgres + LiteLLM gateway
 uv sync
 
 # Invoke the agent directly, no HTTP layer:
@@ -75,6 +80,20 @@ for a different MCP-compatible provider (Exa, Tavily, ...). Tracing
 (`ARIZE_SPACE_ID`/`ARIZE_API_KEY`) and the AgentCore deployment path are both
 optional for local dev -- everything else runs against real Anthropic/Mongo/
 Postgres/MCP services with just the steps above.
+
+### LLM gateway
+
+`agent_demo/llm.py` never calls Anthropic directly -- it talks to a LiteLLM
+proxy (`LLM_GATEWAY_BASE_URL`, default `http://localhost:4000`) over the
+OpenAI-compatible API via `ChatOpenAI`, and authenticates with
+`LLM_GATEWAY_API_KEY`. The `docker compose up -d` step above starts that
+proxy from `litellm_config.yaml`, which is where `ANTHROPIC_API_KEY` and the
+`PRIMARY_MODEL`/`FALLBACK_MODEL` -> real-model mapping live -- the app
+process never sees the Anthropic key. To add a model or switch providers,
+edit `litellm_config.yaml`'s `model_list` (and the matching env var), not
+`agent_demo/llm.py`. In production, point `LLM_GATEWAY_BASE_URL` at a
+centrally-hosted LiteLLM (or other OpenAI-compatible) gateway instead of the
+local container.
 
 ## Testing
 

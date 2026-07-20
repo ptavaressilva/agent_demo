@@ -25,6 +25,12 @@ needs your AWS account/credentials and hasn't been executed.
   Mongo/Postgres in this repo are for **local dev only**, not what the
   deployed agent talks to. Point `MONGO_URI` / `POSTGRES_DSN` at your real
   instances via the Runtime's environment configuration.
+- A reachable LLM gateway (LiteLLM proxy) -- the `litellm` service in
+  `docker-compose.yml` is local-dev only. In production, run LiteLLM as its
+  own service (its own deployment, or LiteLLM's hosted offering) and point
+  `LLM_GATEWAY_BASE_URL` at it via the Runtime's environment configuration.
+  See "Anthropic credentials" below for how the gateway key itself is kept
+  out of the container.
 - An MCP web-search provider reachable from the container (e.g. a Brave API
   key, or swap `MCP_WEB_SEARCH_COMMAND`/`ARGS` for a hosted MCP server over
   `streamable_http` instead of stdio if you'd rather not run `npx` in the
@@ -32,32 +38,38 @@ needs your AWS account/credentials and hasn't been executed.
 - Arize AX space ID + API key, if you want tracing (`ARIZE_SPACE_ID`,
   `ARIZE_API_KEY`).
 
-## 2. Anthropic credentials via AgentCore Identity (recommended for prod)
+## 2. LLM gateway credentials via AgentCore Identity (recommended for prod)
 
-Rather than baking `ANTHROPIC_API_KEY` into the container/environment, store
-it as an AgentCore Identity API-key credential provider and let
-`agent_demo/llm.py` resolve it per-call (`ANTHROPIC_AUTH_MODE=agentcore_identity`,
-already set in `deployment/Dockerfile`). The starter-toolkit CLI only wraps
-OAuth2 providers, not API-key ones, so create it directly via boto3:
+The deployed agent never talks to Anthropic directly -- it calls an LLM
+gateway (LiteLLM proxy) over `LLM_GATEWAY_BASE_URL`, and the *gateway*
+(not this container) holds `ANTHROPIC_API_KEY`. The only secret this
+container needs is the gateway's own key. Rather than baking
+`LLM_GATEWAY_API_KEY` into the container/environment, store it as an
+AgentCore Identity API-key credential provider and let `agent_demo/llm.py`
+resolve it per-call (`LLM_GATEWAY_AUTH_MODE=agentcore_identity`, already set
+in `deployment/Dockerfile`). The starter-toolkit CLI only wraps OAuth2
+providers, not API-key ones, so create it directly via boto3:
 
 ```python
 import boto3
 
 client = boto3.client("bedrock-agentcore-control", region_name="us-east-1")
 client.create_api_key_credential_provider(
-    name="anthropic-api-key",  # must match BEDROCK_AGENTCORE_MODEL_PROVIDER_API_KEY_NAME
-    apiKey="sk-ant-...",
+    name="llm-gateway-api-key",  # must match BEDROCK_AGENTCORE_MODEL_PROVIDER_API_KEY_NAME
+    apiKey="sk-...",  # the gateway's LiteLLM master/virtual key, not the Anthropic key
 )
 ```
 
 Set `BEDROCK_AGENTCORE_MODEL_PROVIDER_API_KEY_NAME` on the Runtime agent to
-whatever `name` you used (defaults to `anthropic-api-key`, matching the
+whatever `name` you used (defaults to `llm-gateway-api-key`, matching the
 example above). The agent's execution role needs permission to read this
 credential provider at runtime.
 
 If you'd rather keep it simple for a first deployment, leave
-`ANTHROPIC_AUTH_MODE=env` and set `ANTHROPIC_API_KEY` as a plain Runtime
-environment variable instead -- `agent_demo/llm.py` supports both.
+`LLM_GATEWAY_AUTH_MODE=env` and set `LLM_GATEWAY_API_KEY` as a plain Runtime
+environment variable instead -- `agent_demo/llm.py` supports both. Either
+way, also set `LLM_GATEWAY_BASE_URL` to the gateway's real (non-localhost)
+endpoint.
 
 ## 3. Configure and deploy
 

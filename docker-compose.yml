@@ -1,4 +1,15 @@
 services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    ports:
+      - "4000:4000"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in .env}
+      LITELLM_MASTER_KEY: ${LLM_GATEWAY_API_KEY:?set LLM_GATEWAY_API_KEY in .env}
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+
   mongo:
     image: mongo:7
     ports:

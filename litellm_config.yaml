@@ -1,0 +1,24 @@
+# Local-dev LLM gateway config (LiteLLM proxy). Run via `docker compose up -d
+# litellm` -- see docker-compose.yml. The proxy exposes an OpenAI-compatible
+# API on :4000; agent_demo/llm.py talks to it through ChatOpenAI and never
+# sees the real ANTHROPIC_API_KEY, which is only ever read by this process.
+#
+# `model_name` is the alias the app requests (PRIMARY_MODEL/FALLBACK_MODEL in
+# .env); `litellm_params.model` is the real upstream model LiteLLM routes to.
+# Add more entries here (and to the app's env vars) to add providers/models
+# without touching agent_demo code.
+model_list:
+  - model_name: claude-opus-4-8
+    litellm_params:
+      model: anthropic/claude-opus-4-8
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+general_settings:
+  # Clients must send this as a Bearer token (LLM_GATEWAY_API_KEY in the
+  # app's .env). Keeps the gateway from being an open relay to your
+  # Anthropic spend even though it's reachable on localhost.
+  master_key: os.environ/LITELLM_MASTER_KEY

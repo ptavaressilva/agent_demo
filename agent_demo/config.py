@@ -9,16 +9,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # --- Anthropic ---
-    # In local dev the key comes straight from this env var. When deployed to
-    # AgentCore Runtime, set ANTHROPIC_AUTH_MODE=agentcore_identity instead --
-    # the key is then resolved per-call from an AgentCore Identity API-key
-    # credential provider (see agent_demo/llm.py and deployment/README.md)
-    # and never needs to be baked into the container.
-    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
-    anthropic_auth_mode: str = Field(default="env", alias="ANTHROPIC_AUTH_MODE")
+    # --- LLM gateway ---
+    # All model calls are routed through an LLM gateway (LiteLLM proxy --
+    # see litellm_config.yaml) instead of hitting Anthropic directly. The
+    # gateway holds the real provider credentials; this process only ever
+    # sees a gateway key. In local dev the key comes straight from this env
+    # var. When deployed to AgentCore Runtime, set
+    # LLM_GATEWAY_AUTH_MODE=agentcore_identity instead -- the key is then
+    # resolved per-call from an AgentCore Identity API-key credential
+    # provider (see agent_demo/llm.py and deployment/README.md) and never
+    # needs to be baked into the container.
+    llm_gateway_base_url: str = Field(
+        default="http://localhost:4000", alias="LLM_GATEWAY_BASE_URL"
+    )
+    llm_gateway_api_key: str = Field(default="", alias="LLM_GATEWAY_API_KEY")
+    llm_gateway_auth_mode: str = Field(default="env", alias="LLM_GATEWAY_AUTH_MODE")
     agentcore_model_provider_api_key_name: str = Field(
-        default="anthropic-api-key", alias="BEDROCK_AGENTCORE_MODEL_PROVIDER_API_KEY_NAME"
+        default="llm-gateway-api-key", alias="BEDROCK_AGENTCORE_MODEL_PROVIDER_API_KEY_NAME"
     )
     primary_model: str = Field(default="claude-opus-4-8", alias="PRIMARY_MODEL")
     fallback_model: str = Field(default="claude-haiku-4-5", alias="FALLBACK_MODEL")
