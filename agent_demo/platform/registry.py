@@ -1,7 +1,14 @@
-"""Every agent this deployment can serve, keyed by `agent_id`. `main.py`
-selects one via the `AGENT_ID` env var and never imports anything from
-`agent_demo.agents.*` beyond this lookup -- adding a new agent means adding
-it to `_build_registry` below, not touching `main.py` or `platform/`.
+"""Turns `agent_demo.agents.manifest.AGENTS` -- the list of agents this
+deployment can serve, contributed from the agents' own namespace -- into a
+lookup by `agent_id`. `main.py` selects one via the `AGENT_ID` env var and
+never imports anything from `agent_demo.agents.*` beyond this lookup.
+
+This module is the one place under `agent_demo/platform/` allowed to import
+from `agent_demo.agents.*`, and even here only from the manifest -- never a
+specific agent's class or package. Onboarding a new agent means adding it to
+`agent_demo/agents/manifest.py`; nothing under `agent_demo/platform/` or
+`main.py` changes (see tests/test_no_agent_names_in_platform.py, which
+enforces this at CI time).
 
 Registration validates each agent's own budget defaults against the
 platform's ceilings (`platform.config.platform_settings`) and fails process
@@ -14,10 +21,9 @@ from __future__ import annotations
 
 import os
 
+from agent_demo.agents.manifest import AGENTS, DEFAULT_AGENT_ID
 from agent_demo.platform.config import platform_settings
 from agent_demo.platform.spec import AgentSpec
-
-DEFAULT_AGENT_ID = "house-search"
 
 
 def _validate_ceilings(agent: AgentSpec) -> None:
@@ -39,23 +45,19 @@ def _validate_ceilings(agent: AgentSpec) -> None:
 
 
 def _build_registry() -> dict[str, AgentSpec]:
-    from agent_demo.agents.faq_agent.spec import FaqAgent
-    from agent_demo.agents.house_search.spec import HouseSearchAgent
-
-    agents: list[AgentSpec] = [HouseSearchAgent(), FaqAgent()]
-    for agent in agents:
+    for agent in AGENTS:
         _validate_ceilings(agent)
-    return {agent.agent_id: agent for agent in agents}
+    return {agent.agent_id: agent for agent in AGENTS}
 
 
-AGENTS: dict[str, AgentSpec] = _build_registry()
+_REGISTRY: dict[str, AgentSpec] = _build_registry()
 
 
 def load_agent(agent_id: str | None = None) -> AgentSpec:
     agent_id = agent_id or os.environ.get("AGENT_ID", DEFAULT_AGENT_ID)
     try:
-        return AGENTS[agent_id]
+        return _REGISTRY[agent_id]
     except KeyError:
         raise RuntimeError(
-            f"Unknown AGENT_ID {agent_id!r}. Registered agents: {sorted(AGENTS)}"
+            f"Unknown AGENT_ID {agent_id!r}. Registered agents: {sorted(_REGISTRY)}"
         ) from None

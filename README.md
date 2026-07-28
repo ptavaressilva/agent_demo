@@ -56,28 +56,93 @@ it never contacts the listing agent or schedules anything itself. See
 
 ```
 main.py (AgentCore entrypoint, agent-agnostic)
-  -> agent_demo/platform/registry.py: load_agent()   # picks an AgentSpec via AGENT_ID
+  -> agent_demo/platform/registry.py: load_agent()  # picks an AgentSpec via AGENT_ID
+      agent_demo/agents/manifest.py: AGENTS              # the list of agents this deployment can serve
   -> agent_demo/platform/harness.py: run(agent, payload)
-       -> agent_demo/platform/tracing.py             # Arize AX / OpenInference, always runs first
-       -> agent_demo/platform/kill_switch.py          # checked before any other work, always
-       -> agent.build_tools(resources)                 # agent-supplied, e.g.:
-            agent_demo/agents/house_search/tools/
-              postgres_tools.py                          # save/rate listings, draft viewing requests
-              memory_tools.py                             # remember/recall facts + preferences
-            agent_demo/agents/faq_agent/tools.py            # a single static-answer tool
-       -> agent_demo/platform/llm.py                   # <agent's model names> -> fallback, via LLM gateway
-            -> litellm proxy (:4000)                      # holds ANTHROPIC_API_KEY, routes to Anthropic
-       -> agent_demo/platform/graph_factory.py         # StateGraph: agent <-> tools -> critic (shared by every agent)
-       -> agent_demo/lib/memory/                        # shared infra, opt-in (not platform-enforced)
-            short_term.py                                 # MongoDBSaver checkpointer (per session)
-            long_term.py                                  # MongoLongTermStore
-            factual.py                                     # FactualMemory (research notes)
+  -> agent_demo/platform/tracing.py                 # Arize AX / OpenInference, always runs first
+  -> agent_demo/platform/kill_switch.py             # checked before any other work, always
+  -> agent.build_tools(resources)                   # agent-supplied, e.g.:
+      agent_demo/agents/house_search/tools/
+        postgres_tools.py                           # save/rate listings, draft viewing requests
+        memory_tools.py                             # remember/recall facts + preferences
+      agent_demo/agents/faq_agent/tools.py          # a single static-answer tool
+  -> agent_demo/platform/llm.py                     # <agent's model names> -> fallback, via LLM gateway
+      -> litellm proxy (:4000)                      # holds ANTHROPIC_API_KEY, routes to Anthropic
+  -> agent_demo/platform/graph_factory.py           # StateGraph: agent <-> tools -> critic (shared by every agent)
+  -> agent_demo/lib/memory/                         # shared infra, opt-in (not platform-enforced)
+      short_term.py                                 # MongoDBSaver checkpointer (per session)
+      long_term.py                                  # MongoLongTermStore
+      factual.py                                    # FactualMemory (research notes)
 ```
 
-An agent's entire surface is `agent_demo/platform/spec.py`'s `AgentSpec`
-Protocol -- compare `agent_demo/agents/house_search/spec.py` (Postgres, MCP,
-memory tools, human-in-the-loop) against `agent_demo/agents/faq_agent/spec.py`
-(one static tool, nothing else) to see how little a new agent has to supply.
+## Platform/agent decoupling
+
+The entire seam between `agent_demo/platform/` and `agent_demo/agents/` is
+`agent_demo/platform/spec.py`'s `AgentSpec` Protocol. `harness.run()` is the
+only thing that ever calls into an agent, and it only ever calls through
+that Protocol -- compare `agent_demo/agents/house_search/spec.py` (Postgres,
+MCP, memory tools, human-in-the-loop) against
+`agent_demo/agents/faq_agent/spec.py` (one static tool, nothing else) to see
+how little a new agent has to supply:
+
+- `request_schema` / `state_schema` -- its own request shape and graph
+  state, each extending the platform's `BaseInvokeEnvelope`/`BaseAgentState`.
+- `build_initial_domain_state()` / `render_system_prompt()` -- its own
+  per-session domain state and prompt.
+- `build_tools(resources)` -- its own tools, built from `RequestResources`
+  (the Mongo client, this request's validated payload, the long-term store)
+  -- notably not a chat model or a graph; those stay owned by
+  `platform.llm`/`platform.graph_factory`.
+- `primary_model` / `fallback_model` and its own step/retry budget defaults
+  -- a business choice each agent makes in its own config, not a deployment
+  one.
+
+Everything else is the platform's, enforced by `harness.run()` identically
+for every registered agent, unconditionally:
+
+- **Kill switch** (`platform/kill_switch.py`) -- checked before any other
+  work, including an agent's own resource setup, and before resuming a
+  paused human-in-the-loop approval.
+- **Tracing** (`platform/tracing.py`) -- configured once per call; the
+  agent's `agent_id` is the only per-agent input.
+- **Model access** (`platform/llm.py`) -- an agent picks model *names* only;
+  `platform/llm.py` is the only place a model client is constructed, and it
+  always goes through the LLM gateway. `AgentSpec` has no hook for an agent
+  to build its own client.
+- **Graph shape** (`platform/graph_factory.py`) -- the ReAct + self-
+  correction loop is assembled by the platform from the agent's own
+  model/tools/prompt, not by the agent.
+- **Budgets** (`platform/budget.py` + `platform/config.py`) -- an agent's
+  requested/default step and retry counts are clamped to a platform-wide
+  ceiling that no agent or per-request override can exceed; the registry
+  also fails process startup if an agent's own defaults exceed that
+  ceiling, catching a misconfiguration at deploy time rather than masking it
+  per-request.
+
+**Registration doesn't require the platform to name an agent either.**
+Agents list themselves in `agent_demo/agents/manifest.py`
+(`AGENTS = [HouseSearchAgent(), FaqAgent()]`); `platform/registry.py` only
+ever imports that list, never a specific agent's class or package, and
+`main.py` only ever calls `registry.load_agent()`. Onboarding a new agent
+means adding one line to the manifest -- nothing under `agent_demo/platform/`
+or `main.py` changes.
+
+**One seam isn't fully structural.** `platform/hitl.py`'s
+`request_approval`/`is_approved` standardizes the human-in-the-loop
+approve/reject envelope, but nothing at the entrypoint level stops a tool
+author from calling LangGraph's `interrupt()` directly instead of going
+through it. That gap is closed by a CI test, not the type system.
+
+**What keeps this from rotting:** three tests assert the boundary
+structurally instead of relying on it staying true by convention --
+`tests/platform/test_harness.py`'s `NullAgent` (a test double with no
+business logic at all proves the kill-switch/tracing/budget guarantees hold
+for *any* `AgentSpec`, not one that happens to cooperate),
+`tests/test_no_raw_interrupt.py` (fails if a tool calls `interrupt()`
+directly instead of through `platform/hitl.py`), and
+`tests/test_no_agent_names_in_platform.py` (fails if anything under
+`agent_demo/platform/` imports from `agent_demo.agents.*` beyond
+`registry.py`'s manifest import). See Testing below for all three.
 
 ## Local development
 
@@ -149,7 +214,8 @@ uv run pytest
   against a fake Mongo collection; and `harness.run`'s enforcement
   guarantees (kill switch ordering, tracing-once, budget clamping,
   agent-independent `recursion_limit`) against a `NullAgent` test double that
-  supplies no business logic at all.
+  supplies no business logic at all; and the registry (`load_agent`
+  resolving `DEFAULT_AGENT_ID` and rejecting an unknown `AGENT_ID`).
 - `tests/agents/` covers each agent's own tools/spec -- e.g. house-search's
   human-in-the-loop `draft_viewing_request` gate, run through the real
   platform graph factory against a fake Postgres pool.
@@ -157,6 +223,11 @@ uv run pytest
   tool calls LangGraph's `interrupt()` directly instead of going through
   `agent_demo/platform/hitl.py`'s `request_approval` -- the one seam that
   isn't structurally enforced (see that module's docstring).
+- `tests/test_no_agent_names_in_platform.py` is a second CI backstop: it
+  fails if anything under `agent_demo/platform/` imports from
+  `agent_demo.agents.*` other than `registry.py` importing the manifest --
+  the invariant that lets a new agent be onboarded via
+  `agent_demo/agents/manifest.py` alone.
 
 ## Known limitations
 
