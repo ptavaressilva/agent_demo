@@ -18,14 +18,19 @@ the agent always gets to produce a real summary before the run ends.
                     -> budget_stop -> agent -> END   (one grace turn on budget exhaustion)
 
 This graph shape (and the critic/budget-stop guarantee that comes with it) is
-what an agent gets by having `harness.run()` build its graph via
-`build_react_graph` -- it is not something an agent's own code assembles, so
-there is no way for an agent to skip the critic or the graceful-stop grace
-turn while still using this factory. An agent needing genuinely non-ReAct
-control flow is the one documented escape hatch (not implemented here): it
-would forfeit this factory's critic/budget-stop guarantee, though kill
-switch/tracing/gateway routing/the `recursion_limit` backstop remain enforced
-by `harness.run()` regardless of which graph a request ends up using.
+what an agent gets by default from `harness.run()` -- it is not something an
+agent's own code assembles, so there is no way for an agent to skip the
+critic or the graceful-stop grace turn while still using this factory.
+
+An agent needing genuinely non-ReAct control flow sets `AgentSpec
+.graph_factory` to a different factory with the same call convention (see
+`platform.spec.AgentSpec` and `platform.plan_execute_graph.
+build_plan_execute_graph` for a worked Plan-and-Execute example) -- doing so
+forfeits this factory's critic/budget-stop guarantee specifically (an
+alternate factory has to build its own equivalents if it wants them), though
+kill switch/tracing/gateway routing/the `recursion_limit` backstop remain
+enforced by `harness.run()` regardless of which graph a request ends up
+using.
 """
 
 from __future__ import annotations

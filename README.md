@@ -78,10 +78,27 @@ main.py (AgentCore entrypoint, agent-agnostic)
 ## Platform/agent decoupling
 
 The entire seam between `agent_demo/platform/` and `agent_demo/agents/` is
-`agent_demo/platform/spec.py`'s `AgentSpec` Protocol. `harness.run()` is the
-only thing that ever calls into an agent, and it only ever calls through
-that Protocol -- compare `agent_demo/agents/house_search/spec.py` (Postgres,
-MCP, memory tools, human-in-the-loop) against
+`agent_demo/platform/spec.py`'s `AgentSpec` Protocol -- the entire surface an
+agent author implements:
+
+```python
+class AgentSpec(Protocol):
+    agent_id: str
+    request_schema: type[BaseInvokeEnvelope]
+    state_schema: type[BaseAgentState]
+    primary_model: str
+    fallback_model: str
+    default_max_react_steps: int
+    default_max_self_correction_retries: int
+
+    def build_initial_domain_state(self, request) -> dict: ...
+    def render_system_prompt(self, state) -> str: ...
+    async def build_tools(self, resources: RequestResources) -> list[BaseTool]: ...
+```
+
+`harness.run()` is the only thing that ever calls into an agent, and it only
+ever calls through that Protocol -- compare `agent_demo/agents/house_search/spec.py`
+(Postgres, MCP, memory tools, human-in-the-loop) against
 `agent_demo/agents/faq_agent/spec.py` (one static tool, nothing else) to see
 how little a new agent has to supply:
 

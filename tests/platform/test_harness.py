@@ -214,6 +214,32 @@ async def test_recursion_limit_is_platform_derived_regardless_of_agent_defaults(
     assert captured_config["recursion_limit"] == 20
 
 
+async def test_run_uses_the_agents_own_graph_factory_when_it_sets_one(monkeypatch):
+    """An `AgentSpec` that sets `graph_factory` gets that graph built instead
+    of the platform default -- proving the escape hatch documented in
+    `platform.spec.AgentSpec` actually wires through `harness.run`."""
+    fake_client = FakeMongoClient()
+    tracing_calls: list[str] = []
+    default_graph = _FakeGraph()
+    custom_graph = _FakeGraph()
+    _patch_happy_path(monkeypatch, fake_client, default_graph, tracing_calls)
+
+    build_calls: list[tuple] = []
+
+    def _fake_custom_factory(*args, **kwargs):
+        build_calls.append((args, kwargs))
+        return custom_graph
+
+    class _CustomGraphAgent(NullAgent):
+        graph_factory = _fake_custom_factory
+
+    await harness_module.run(_CustomGraphAgent(), {"message": "hi"})
+
+    assert build_calls, "the agent's own graph_factory should have been called"
+    assert custom_graph.ainvoke_calls
+    assert not default_graph.ainvoke_calls
+
+
 async def test_run_returns_pending_approval_when_graph_interrupts(monkeypatch):
     fake_client = FakeMongoClient()
     tracing_calls: list[str] = []

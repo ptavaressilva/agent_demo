@@ -5,11 +5,12 @@ thin AgentCore adapter around `run()` below.
 
 `run()` is the platform's enforcement point: it always configures tracing,
 always checks the kill switch before any other work, always routes model
-calls through the gateway, always clamps budgets to the platform ceiling, and
-always builds the graph via the shared ReAct+critic factory -- for whichever
-`AgentSpec` it's given. An agent cannot skip any of this because it never
-gets a chance to run its own version of this function; it only supplies the
-pieces `AgentSpec` asks for (tools, domain state, a system prompt renderer).
+calls through the gateway, and always clamps budgets to the platform ceiling
+-- for whichever `AgentSpec` it's given. An agent cannot skip any of this
+because it never gets a chance to run its own version of this function; it
+only supplies the pieces `AgentSpec` asks for (tools, domain state, a system
+prompt renderer, and optionally its own graph factory in place of the
+platform's default ReAct+critic one -- see `AgentSpec.graph_factory`).
 
 Process-wide resources (Mongo client) are created lazily and cached for the
 life of the process; only the parts that vary per request (this request's
@@ -141,7 +142,13 @@ async def run(agent: AgentSpec, payload: dict) -> InvokeResult:
     model = await build_chat_model_with_fallback(
         tools, primary_model=agent.primary_model, fallback_model=agent.fallback_model
     )
-    graph = build_react_graph(
+    # `type(agent)`, not `agent`: a plain function assigned as a class
+    # attribute would otherwise be bound to the instance as a method
+    # (implicit `self` swallowing the `model` positional arg) if looked up
+    # through the instance instead. Falls back to the platform's ReAct+critic
+    # default when an agent doesn't set this (see AgentSpec's docstring).
+    graph_factory = getattr(type(agent), "graph_factory", None) or build_react_graph
+    graph = graph_factory(
         model,
         tools,
         checkpointer,

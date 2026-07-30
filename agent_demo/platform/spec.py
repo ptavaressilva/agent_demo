@@ -1,11 +1,26 @@
 """`AgentSpec` is the entire surface an agent author implements. `harness.run`
 owns the entrypoint and calls into an `AgentSpec` implementation only through
 this fixed interface -- there is deliberately no hook here for an agent to
-construct its own model client, its own graph, or reach the kill
-switch/tracing/Mongo client directly, so there is nothing for an agent author
-to forget or bypass: kill switch, tracing, gateway routing, and budget
-ceilings are enforced by `harness.run` itself for every `AgentSpec`,
-unconditionally.
+construct its own model client, or reach the kill switch/tracing/Mongo client
+directly, so there is nothing for an agent author to forget or bypass: kill
+switch, tracing, gateway routing, and budget ceilings are enforced by
+`harness.run` itself for every `AgentSpec`, unconditionally.
+
+The one deliberate exception is `graph_factory` below: an agent needing a
+loop pattern other than the platform default (plain ReAct + self-correction
+critic, see `platform.graph_factory.build_react_graph`) can supply its own,
+e.g. `platform.plan_execute_graph.build_plan_execute_graph` for a
+Plan-and-Execute loop. It's optional and deliberately *not* declared as a
+Protocol member -- most agents never set it, and declaring it as a required
+attribute would force every existing `AgentSpec` to redeclare a "just use the
+default" no-op. `harness.run` looks it up with `getattr(type(agent),
+"graph_factory", None)`, falling back to `build_react_graph` when absent.
+Whichever factory runs, kill switch/tracing/gateway routing/budget
+clamping/the `recursion_limit` backstop stay enforced identically -- those
+live in `harness.run`, not in the factory. What does *not* carry over
+automatically is `build_react_graph`'s own guarantees (the self-correction
+critic, the graceful step-budget stop) -- an alternate factory has to build
+its own equivalents if it wants them.
 """
 
 from __future__ import annotations
@@ -52,3 +67,17 @@ class AgentSpec(Protocol):
     def render_system_prompt(self, state: BaseAgentState) -> str: ...
 
     async def build_tools(self, resources: RequestResources) -> list[BaseTool]: ...
+
+    # Optional, not a Protocol member on purpose (see module docstring): set
+    # this class attribute to swap the platform's default ReAct+critic loop
+    # for a different one, e.g.
+    #
+    #   from agent_demo.platform.plan_execute_graph import build_plan_execute_graph
+    #   graph_factory = build_plan_execute_graph
+    #
+    # A plain function assigned here is safe to call unbound (no implicit
+    # `self`) because `harness.run` looks it up via `type(agent)`, not
+    # `agent` -- accessing a function through the class itself never binds it
+    # to an instance the way `agent.graph_factory` would. Must match
+    # `build_react_graph`'s call convention: `(model, tools, checkpointer,
+    # store, system_prompt_fn=..., state_schema=...) -> CompiledStateGraph`.
