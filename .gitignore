@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 .bedrock_agentcore/
 uv.lock
+.DS_Store
